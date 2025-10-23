@@ -10,17 +10,20 @@
 #define LED4 17
 #define BUTTON_PIN 26
 
-// Variables
+
+volatile bool flagSleep = false; 
 bool enSleep = false;
 unsigned long tCerca = 0;
 float distanciaActual = 0;
 float distanciaMinima = 150;
 float aceleracionSimulada = 0;
 
+volatile unsigned long lastInterruptTime = 0;
+const unsigned long debounceDelay = 1000; // ms
+
 // WiFi
 const char* ssid = "yiyiyi";          
 const char* password = "xabicrack";   
-
 
 WebServer server(80);
 
@@ -65,20 +68,26 @@ void apagarLeds() {
   digitalWrite(LED4, LOW);
 }
 
-// Entrar en modo sleep
-void entrarEnSleep() {
-  Serial.println("Entrando en modo baja energía...");
+void IRAM_ATTR botonISR() {
+  unsigned long currentTime = millis();
+  if (currentTime - lastInterruptTime > debounceDelay) {
+    flagSleep = true;
+    lastInterruptTime = currentTime;
+  }
+}
+
+void ejecutarSleep() {
+  Serial.println("Entrando en modo baja energía (light sleep)...");
   apagarLeds();
   enSleep = true;
 
-  // Configurar G26 para despertar
   esp_sleep_enable_ext0_wakeup((gpio_num_t)BUTTON_PIN, 0);
-
-  delay(200); 
+  delay(50);
   esp_light_sleep_start();
 
   Serial.println("Despertado por pulsador");
   enSleep = false;
+  flagSleep = false; 
 }
 
 // Servidor web para mostrar distancia y aceleración
@@ -140,15 +149,15 @@ void setup() {
   server.on("/", handleRoot);
   server.begin();
   Serial.println("Servidor web iniciado");
+
+  attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), botonISR, FALLING);
 }
 
 void loop() {
-
   server.handleClient();
 
-  if (!enSleep && digitalRead(BUTTON_PIN) == LOW) {
-    delay(50);
-    if (digitalRead(BUTTON_PIN) == LOW) entrarEnSleep();
+  if (flagSleep && !enSleep) {
+    ejecutarSleep();
   }
 
   distanciaActual = medirDistancia();
@@ -173,7 +182,7 @@ void loop() {
     if (distanciaActual < 15) {
       if (tCerca == 0) tCerca = millis();
       else if (millis() - tCerca >= 5000) {
-        entrarEnSleep();
+        ejecutarSleep();
         tCerca = 0;
       }
     } else tCerca = 0;
